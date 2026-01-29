@@ -78,9 +78,9 @@ impl MotionDetectorGui {
                 motion_count: 0,
                 last_motion_time: None,
                 fps: 0.0,
-                resolution: (800, 448), // Default resolution that works
+                resolution: (1280, 720), // Logitech C920 HD
             },
-            available_cameras: vec!["Camera 0 - 800x448".to_string()],
+            available_cameras: vec!["Camera 0 - 1280x720 (C920 HD)".to_string()],
             show_about: false,
             status_log: vec!["GUI Control Panel Started".to_string()],
             auto_scroll: true,
