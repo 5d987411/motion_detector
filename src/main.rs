@@ -64,9 +64,9 @@ impl MotionDetector {
             ));
         }
 
-        // Set camera properties for better performance
-        camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, 640.0)?;
-        camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, 480.0)?;
+        // Set camera properties for 1080p resolution
+        camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, 1920.0)?;
+        camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, 1080.0)?;
         camera.set(opencv::videoio::CAP_PROP_FPS, 30.0)?;
 
         let mut frame = Mat::default();
@@ -386,7 +386,7 @@ fn run_detector_thread(
                         motion_count: detector.motion_count,
                         last_motion_time: detector.last_motion_time.map(|_| Local::now()),
                         fps: detector.current_fps,
-                        resolution: (640, 480), // TODO: Get actual resolution
+                        resolution: (1920, 1080), // TODO: Get actual resolution
                     };
 
                     // Send state to GUI (non-blocking)

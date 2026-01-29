@@ -69,7 +69,7 @@ impl MotionDetectorGui {
                 motion_detected: false,
                 motion_count: 0,
                 fps: 0.0,
-                resolution: (800, 448),
+                resolution: (1920, 1080),
                 last_motion_time: None,
                 error_message: None,
             },

@@ -29,7 +29,7 @@ impl Default for TestMotionDetector {
             motion_count: 0,
             motion_detected: false,
             fps: 30.0,
-            resolution: (800, 448),
+            resolution: (1920, 1080),
             last_motion_time: None,
             status_log: vec!["GUI Test Started".to_string()],
             auto_scroll: true,
@@ -126,9 +126,9 @@ impl eframe::App for TestMotionDetector {
                     ui.horizontal(|ui| {
                         ui.label("Camera:");
                         egui::ComboBox::from_label("")
-                            .selected_text("Camera 0 - 800x448")
+                            .selected_text("Camera 0 - 1920x1080")
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.device, 0, "Camera 0 - 800x448");
+                                ui.selectable_value(&mut self.device, 0, "Camera 0 - 1920x1080");
                                 ui.selectable_value(&mut self.device, 1, "Camera 1 - Unknown");
                             });
                     });
