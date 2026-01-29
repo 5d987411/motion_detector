@@ -64,10 +64,14 @@ impl MotionDetector {
             ));
         }
 
-        // Set camera properties for 1080p resolution
-        camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, 1920.0)?;
-        camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, 1080.0)?;
+        // Try a basic resolution first
+        println!("Setting basic camera resolution...");
+        camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, 640.0)?;
+        camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, 480.0)?;
         camera.set(opencv::videoio::CAP_PROP_FPS, 30.0)?;
+
+        // Wait a moment for camera to stabilize
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         let mut frame = Mat::default();
         camera.read(&mut frame)?;
@@ -203,8 +207,16 @@ impl MotionDetector {
     }
 
     #[allow(dead_code)]
+    #[allow(dead_code)]
     fn release(&mut self) {
         let _ = self.camera.release();
+    }
+
+    fn get_resolution(&self) -> (i32, i32) {
+        (
+            self.previous_frame.cols() as i32,
+            self.previous_frame.rows() as i32,
+        )
     }
 
     fn list_cameras() -> Result<Vec<String>> {
@@ -386,7 +398,10 @@ fn run_detector_thread(
                         motion_count: detector.motion_count,
                         last_motion_time: detector.last_motion_time.map(|_| Local::now()),
                         fps: detector.current_fps,
-                        resolution: (1920, 1080), // TODO: Get actual resolution
+                        resolution: (
+                            detector.previous_frame.cols() as i32,
+                            detector.previous_frame.rows() as i32,
+                        ),
                     };
 
                     // Send state to GUI (non-blocking)

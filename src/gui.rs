@@ -78,9 +78,9 @@ impl MotionDetectorGui {
                 motion_count: 0,
                 last_motion_time: None,
                 fps: 0.0,
-                resolution: (1920, 1080),
+                resolution: (800, 448), // Default resolution that works
             },
-            available_cameras: vec!["Camera 0 - 1920x1080".to_string()],
+            available_cameras: vec!["Camera 0 - 800x448".to_string()],
             show_about: false,
             status_log: vec!["GUI Control Panel Started".to_string()],
             auto_scroll: true,
@@ -106,6 +106,12 @@ impl MotionDetectorGui {
                 // Update detector status based on detection state
                 if self.is_detecting {
                     self.detector_status = DetectorStatus::Running;
+                }
+
+                // Update camera resolution info on first status update
+                if self.available_cameras[0] == "Camera 0 - Detecting..." {
+                    self.available_cameras[0] =
+                        format!("Camera 0 - {}x{}", state.resolution.0, state.resolution.1);
                 }
 
                 // Log motion detection events
