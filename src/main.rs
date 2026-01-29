@@ -10,7 +10,7 @@ use opencv::{
     core::{self, Mat, Vector},
     imgcodecs, imgproc,
     prelude::*,
-    videoio::{VideoCapture, CAP_ANY},
+    videoio::{VideoCapture, CAP_ANY, CAP_V4L2},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,7 +55,14 @@ struct MotionDetector {
 
 impl MotionDetector {
     fn new(device: u32, sensitivity: f64, min_area: u32) -> Result<Self> {
-        let mut camera = VideoCapture::new(device as i32, CAP_ANY)?;
+        // Try V4L2 first (better for Logitech on Linux)
+        let mut camera = match VideoCapture::new(device as i32, CAP_V4L2) {
+            Ok(cam) => cam,
+            Err(_) => {
+                println!("V4L2 failed, falling back to default backend");
+                VideoCapture::new(device as i32, CAP_ANY)?
+            }
+        };
 
         if !camera.is_opened()? {
             return Err(anyhow::anyhow!(
@@ -64,20 +71,105 @@ impl MotionDetector {
             ));
         }
 
-        // Try a basic resolution first
-        println!("Setting basic camera resolution...");
-        camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, 640.0)?;
-        camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, 480.0)?;
+        // Enhanced Logitech C920 initialization
+        println!("Initializing Logitech C920 camera...");
+
+        // First, set the backend and basic properties
+        camera.set(opencv::videoio::CAP_PROP_FOURCC, 1196444237.0)?; // MJPG
         camera.set(opencv::videoio::CAP_PROP_FPS, 30.0)?;
 
-        // Wait a moment for camera to stabilize
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Try multiple resolution settings optimized for Logitech C920
+        let resolutions = vec![
+            (1920, 1080, "1080p HD"),
+            (1280, 720, "720p HD"),
+            (960, 540, "540p"),
+            (640, 480, "480p SD"),
+        ];
 
+        let mut actual_resolution = (640, 480);
+        let mut camera_working = false;
+
+        for (width, height, desc) in resolutions {
+            println!("Trying Logitech C920 at {}x{} ({})...", width, height, desc);
+
+            // Set resolution
+            camera.set(opencv::videoio::CAP_PROP_FRAME_WIDTH, width as f64)?;
+            camera.set(opencv::videoio::CAP_PROP_FRAME_HEIGHT, height as f64)?;
+
+            // Reset format after resolution change
+            camera.set(opencv::videoio::CAP_PROP_FOURCC, 1196444237.0)?; // MJPG
+
+            // Give camera time to adjust
+            std::thread::sleep(Duration::from_millis(1000));
+
+            // Test frame capture multiple times
+            let mut success_count = 0;
+            for _ in 0..5 {
+                let mut test_frame = Mat::default();
+                if camera.read(&mut test_frame)? && !test_frame.empty() {
+                    success_count += 1;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            if success_count >= 3 {
+                let actual_width = camera.get(opencv::videoio::CAP_PROP_FRAME_WIDTH)? as i32;
+                let actual_height = camera.get(opencv::videoio::CAP_PROP_FRAME_HEIGHT)? as i32;
+
+                println!(
+                    "✓ Logitech C920 working at {}x{} (success rate: {}/5)",
+                    actual_width, actual_height, success_count
+                );
+
+                // Update actual resolution based on what the camera reports
+                actual_resolution = (actual_width as u32, actual_height as u32);
+                camera_working = true;
+                break;
+            } else {
+                println!(
+                    "✗ {}x{} failed (success rate: {}/5)",
+                    width, height, success_count
+                );
+            }
+        }
+
+        if !camera_working {
+            return Err(anyhow::anyhow!(
+                "Failed to get stable frame capture from Logitech C920"
+            ));
+        }
+
+        // Final camera parameters
+        let final_width = camera.get(opencv::videoio::CAP_PROP_FRAME_WIDTH)? as i32;
+        let final_height = camera.get(opencv::videoio::CAP_PROP_FRAME_HEIGHT)? as i32;
+        let final_fps = camera.get(opencv::videoio::CAP_PROP_FPS)?;
+
+        println!("Logitech C920 initialized successfully:");
+        println!("  Resolution: {}x{}", final_width, final_height);
+        println!("  Target FPS: {}", final_fps);
+        println!("  Format: MJPG");
+
+        // Wait for camera to stabilize completely
+        std::thread::sleep(Duration::from_millis(2000));
+
+        // Capture and validate initial frame
         let mut frame = Mat::default();
-        camera.read(&mut frame)?;
+        let mut attempts = 0;
+        loop {
+            if camera.read(&mut frame)? && !frame.empty() {
+                // Validate frame properties
+                if frame.cols() == final_width && frame.rows() == final_height {
+                    break;
+                }
+            }
 
-        if frame.empty() {
-            return Err(anyhow::anyhow!("Failed to capture initial frame"));
+            attempts += 1;
+            if attempts >= 10 {
+                return Err(anyhow::anyhow!(
+                    "Failed to capture valid initial frame after 10 attempts"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
 
         // Convert to grayscale and blur for initial frame to match detection format
@@ -107,7 +199,7 @@ impl MotionDetector {
         })
     }
 
-    fn detect_motion(&mut self) -> Result<bool> {
+    fn detect_motion(&mut self) -> Result<(bool, Mat)> {
         let mut current_frame = Mat::default();
 
         if !self.camera.read(&mut current_frame)? {
@@ -115,7 +207,7 @@ impl MotionDetector {
         }
 
         if current_frame.empty() {
-            return Ok(false);
+            return Ok((false, Mat::default()));
         }
 
         // Convert to grayscale
@@ -193,7 +285,7 @@ impl MotionDetector {
             self.last_motion_time = Some(now);
         }
 
-        Ok(motion_detected)
+        Ok((motion_detected, current_frame))
     }
 
     fn save_snapshot(&self, frame: &Mat) -> Result<String> {
@@ -224,7 +316,14 @@ impl MotionDetector {
 
         // Try to detect available cameras (typically 0-3)
         for i in 0..4 {
-            let mut cam = VideoCapture::new(i, CAP_ANY)?;
+            let mut cam = match VideoCapture::new(i, CAP_V4L2) {
+                Ok(cam) => cam,
+                Err(_) => match VideoCapture::new(i, CAP_ANY) {
+                    Ok(cam) => cam,
+                    Err(_) => continue,
+                },
+            };
+
             if cam.is_opened()? {
                 let mut frame = Mat::default();
                 if cam.read(&mut frame)? && !frame.empty() {
@@ -250,7 +349,7 @@ fn run_cli_mode(args: Args) -> Result<()> {
 
     loop {
         match detector.detect_motion() {
-            Ok(true) => {
+            Ok((true, color_frame)) => {
                 let now = std::time::Instant::now();
                 if now.duration_since(last_motion_time) > Duration::from_secs(2) {
                     motion_count += 1;
@@ -259,13 +358,13 @@ fn run_cli_mode(args: Args) -> Result<()> {
                     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
                     println!("[{}] MOTION DETECTED! (#{})", timestamp, motion_count);
 
-                    // Save snapshot when motion is detected
-                    if let Ok(filename) = detector.save_snapshot(&detector.previous_frame) {
-                        println!("  Snapshot saved: {}", filename);
+                    // Save color snapshot when motion is detected
+                    if let Ok(filename) = detector.save_snapshot(&color_frame) {
+                        println!("  Color snapshot saved: {}", filename);
                     }
                 }
             }
-            Ok(false) => {
+            Ok((false, _)) => {
                 // No motion detected, continue
             }
             Err(e) => {
@@ -357,7 +456,7 @@ fn run_detector_thread(
                     let _ = detector.camera.release();
 
                     // Small delay to ensure camera is fully released
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(500));
 
                     // Try to create new detector with new device
                     match MotionDetector::new(device, detector.sensitivity, detector.min_area) {
@@ -381,9 +480,16 @@ fn run_detector_thread(
                     }
                 }
                 GuiMessage::SaveSnapshot => {
-                    // Save current frame as snapshot
-                    if let Err(e) = detector.save_snapshot(&detector.previous_frame) {
-                        eprintln!("Failed to save snapshot: {}", e);
+                    // Capture and save a fresh color frame as snapshot
+                    let mut fresh_frame = Mat::default();
+                    if detector.camera.read(&mut fresh_frame).is_ok() && !fresh_frame.empty() {
+                        if let Err(e) = detector.save_snapshot(&fresh_frame) {
+                            eprintln!("Failed to save color snapshot: {}", e);
+                        } else {
+                            println!("  Manual color snapshot saved");
+                        }
+                    } else {
+                        eprintln!("Failed to capture frame for manual snapshot");
                     }
                 }
             }
@@ -392,7 +498,7 @@ fn run_detector_thread(
         // Run detection if active
         if is_running {
             match detector.detect_motion() {
-                Ok(motion_detected) => {
+                Ok((motion_detected, color_frame)) => {
                     let motion_state = MotionState {
                         motion_detected,
                         motion_count: detector.motion_count,
@@ -407,12 +513,12 @@ fn run_detector_thread(
                     // Send state to GUI (non-blocking)
                     let _ = sender.try_send(motion_state.clone());
 
-                    // Save snapshot when motion is detected (same logic as CLI mode)
+                    // Save color snapshot when motion is detected (same logic as CLI mode)
                     if motion_detected {
                         let now = std::time::Instant::now();
                         if now.duration_since(last_snapshot_time) > Duration::from_secs(2) {
-                            if let Ok(filename) = detector.save_snapshot(&detector.previous_frame) {
-                                println!("  Motion snapshot saved: {}", filename);
+                            if let Ok(filename) = detector.save_snapshot(&color_frame) {
+                                println!("  Color motion snapshot saved: {}", filename);
                                 last_snapshot_time = now;
                             }
                         }
